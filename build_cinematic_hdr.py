@@ -30,45 +30,46 @@ class CinematicHDREngineModel(nn.Module):
         # Input SDR tensor in range [0.0, 1.0], BT.709 gamma
         x_safe = torch.clamp(x, min=0.0, max=1.0)
 
-        # 1. Continuous IEC 61966-2-1 linearization (No cliff, preserves shadow detail)
+        # 1. Exact Continuous IEC 61966-2-1 Linearization (C1 continuous at 0.04045, zero cliff)
         lin_toe = x_safe / 12.92
-        lin_pow = torch.pow(torch.clamp((x_safe + 0.055) / 1.055, min=1e-7), 2.2)
+        lin_pow = torch.pow(torch.clamp((x_safe + 0.055) / 1.055, min=1e-7), 2.4)
         x_lin = torch.where(x_safe <= 0.04045, lin_toe, lin_pow)
 
         # 2. Extract linear luminance
         y = (x_lin * self.luma_weights).sum(dim=1, keepdim=True)
         y_safe = torch.clamp(y, min=1e-7)
 
-        # 3. Cinematic S-Curve Tone Mapping:
-        # Pull shadows down slightly (1.15 exponent) to lock in deep, rich, inky blacks (kills the milky veil)
-        shadow_knee = 0.25
-        y_shadow = torch.pow(torch.clamp(y_safe / shadow_knee, min=1e-7), 1.15) * shadow_knee
-        y_contrast = torch.where(y_safe < shadow_knee, y_shadow, y_safe)
+        # 3. Smooth, Monotonic Tone Curve (Zero kinks, zero inverted cliffs):
+        # Subtle linear contrast power (y^1.06) locks in deep, rich inky blacks without crushing shadow detail
+        y_contrast = torch.pow(y_safe, 1.06)
 
-        # Specular highlight boost for bright elements (sun, reflections, lights)
-        h = torch.clamp((y_safe - 0.45) / 0.55, min=0.0, max=1.0)
+        # Specular highlight expansion (+20% pop up to 400 nits physical peak)
+        h = torch.clamp((y_safe - 0.40) / 0.60, min=0.0, max=1.0)
         spline = 3.0 * h * h - 2.0 * h * h * h
-        y_hdr = y_contrast + 0.22 * spline
+        y_hdr = y_contrast + 0.20 * spline * y_safe
 
         # Scale RGB preserving exact chromatic balance
         scale = y_hdr / y_safe
         rgb_hdr = x_lin * scale
 
-        # 4. Adaptive Color Vibrance & Saturation (+35% boost for vivid, punchy colors)
+        # 4. Adaptive Color Vibrance with Shadow Rolloff
         y_luma = (rgb_hdr * self.luma_weights).sum(dim=1, keepdim=True)
-        # Calculate saturation per pixel to boost muted colors more than saturated ones
         max_c = torch.max(rgb_hdr, dim=1, keepdim=True).values
         min_c = torch.min(rgb_hdr, dim=1, keepdim=True).values
         sat = (max_c - min_c) / (max_c + 1e-6)
-        
-        # Adaptive vibrance factor: ranges from 1.40 for muted colors to 1.25 for saturated
-        vibrance_factor = 1.0 + 0.38 * (1.2 - 0.4 * sat)
+
+        # Shadow rolloff: roll vibrance boost down to 0 in deep shadows (y_luma < 0.12)
+        # Prevents camera sensor and video compression chroma noise from turning into colored blocks
+        shadow_fade = torch.clamp(y_luma / 0.12, min=0.0, max=1.0)
+        shadow_fade = shadow_fade * shadow_fade * (3.0 - 2.0 * shadow_fade)
+        boost = 0.35 * (1.2 - 0.4 * sat) * shadow_fade
+        vibrance_factor = 1.0 + boost
         rgb_vibrant = y_luma + vibrance_factor * (rgb_hdr - y_luma)
         rgb_clamped = torch.clamp(rgb_vibrant, min=0.0, max=1.0)
 
-        # 5. BT.709 / sRGB Gamma Transfer Encoding for MPC Video Renderer
+        # 5. Exact Continuous IEC 61966-2-1 Gamma Transfer Encoding (C1 continuous at 0.0031308)
         gamma_toe = 12.92 * rgb_clamped
-        gamma_pow = 1.055 * torch.pow(torch.clamp(rgb_clamped, min=1e-7), 1.0 / 2.2) - 0.055
+        gamma_pow = 1.055 * torch.pow(torch.clamp(rgb_clamped, min=1e-7), 1.0 / 2.4) - 0.055
         out = torch.where(rgb_clamped <= 0.0031308, gamma_toe, gamma_pow)
 
         return torch.clamp(out, min=0.0, max=1.0)

@@ -179,7 +179,7 @@ def Convert(
         format=target_format,
         matrix_s="709",
         range_s="limited",
-        dither_type="error_diffusion",
+        dither_type="ordered",
     )
 
     # If source had a different resolution, scale back to original resolution
