@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 vs_portable/
 .agents/
+OpenHDR-for-MPCBE/
+OpenHDR-for-MPCBE.zip
+calibrated_*.onnx
+perfect_hdr10.onnx
+reference_hdr_fp32.onnx
+test_*.onnx
+test_*.png
+test_output/
+*.bak

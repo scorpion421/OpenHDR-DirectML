@@ -63,8 +63,13 @@ class DirectML_HDR_Engine:
         self.input_name = input_meta.name
         self.output_name = self.session.get_outputs()[0].name
         self.input_shape = input_meta.shape  # Expected [1, 3, H, W]
-        self.expected_h = self.input_shape[2] if len(self.input_shape) >= 4 else 1080
-        self.expected_w = self.input_shape[3] if len(self.input_shape) >= 4 else 1920
+        self.is_dynamic = not (
+            len(self.input_shape) >= 4
+            and isinstance(self.input_shape[2], int)
+            and isinstance(self.input_shape[3], int)
+        )
+        self.expected_h = self.input_shape[2] if not self.is_dynamic else None
+        self.expected_w = self.input_shape[3] if not self.is_dynamic else None
         self.is_fp16 = "float16" in input_meta.type
 
     def infer_tensor(self, nchw_rgb: np.ndarray) -> np.ndarray:
@@ -85,11 +90,11 @@ def Convert(
     clip: Any,
     model_path: str | Path = "hdrtvnet_1080p_fp16.onnx",
     device_id: int = 0,
-    output_format: str = "YUV420P10",
-    max_luminance: int = 1000,
+    output_format: str | None = None,
+    max_luminance: int = 400,
     min_luminance: float = 0.005,
-    max_cll: int = 1000,
-    max_fall: int = 400,
+    max_cll: int = 400,
+    max_fall: int = 200,
 ) -> Any:
     """VapourSynth filter entrypoint for DirectML HDR conversion.
     
@@ -121,11 +126,11 @@ def Convert(
 
     orig_w = clip.width
     orig_h = clip.height
-    needs_scale = (orig_w, orig_h) != (engine.expected_w, engine.expected_h)
-
-    # 1. Standardize input clip resolution to match model tensor shape
-    if needs_scale:
-        clip = core.resize.Bicubic(clip, width=engine.expected_w, height=engine.expected_h)
+    needs_scale = False
+    if not engine.is_dynamic:
+        needs_scale = (orig_w, orig_h) != (engine.expected_w, engine.expected_h)
+        if needs_scale:
+            clip = core.resize.Bicubic(clip, width=engine.expected_w, height=engine.expected_h)
 
     # 2. Convert to planar 32-bit float RGB (Rec.709) for model input
     rgb_sdr_clip = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s="709")
@@ -164,33 +169,30 @@ def Convert(
         selector=process_frame,
     )
 
-    # 3. Convert output from BT.2020 RGB to 10-bit YUV420P10 (or RGB48)
-    if output_format.upper() == "RGB48":
-        hdr_output_clip = core.resize.Bicubic(hdr_rgb_clip, format=vs.RGB48)
-    else:
-        # Standard YUV420P10 with BT.2020 non-constant luminance matrix and limited range
-        hdr_output_clip = core.resize.Bicubic(
-            hdr_rgb_clip,
-            format=vs.YUV420P10,
-            matrix_s="2020ncl",
-            range_s="limited",
-        )
+    # 3. Convert output to target format with error diffusion dithering (Zero Banding)
+    target_format = clip.format.id
+    if output_format is not None and hasattr(vs, output_format):
+        target_format = getattr(vs, output_format)
+
+    hdr_output_clip = core.resize.Bicubic(
+        hdr_rgb_clip,
+        format=target_format,
+        matrix_s="709",
+        range_s="limited",
+        dither_type="error_diffusion",
+    )
 
     # If source had a different resolution, scale back to original resolution
     if needs_scale:
         hdr_output_clip = core.resize.Bicubic(hdr_output_clip, width=orig_w, height=orig_h)
 
-    # 4. Inject HDR10 frame properties conforming to SMPTE ST 2084 / BT.2020 standards
+    # 4. Inject frame properties conforming to BT.709 standards for MPC Video Renderer
     hdr10_clip = core.std.SetFrameProps(
         hdr_output_clip,
-        _Matrix=9,          # BT.2020 non-constant luminance
-        _Primaries=9,       # BT.2020
-        _Transfer=16,       # SMPTE ST 2084 / PQ
+        _Matrix=1,          # BT.709
+        _Primaries=1,       # BT.709
+        _Transfer=1,        # BT.709
         _FieldBased=0,      # Progressive
-        MasteringDisplayMinLuminance=int(min_luminance * 10000),  # 0.0001 nit units
-        MasteringDisplayMaxLuminance=int(max_luminance * 10000),
-        MaxCLL=max_cll,
-        MaxFALL=max_fall,
     )
 
     return hdr10_clip
