@@ -8,7 +8,9 @@
 
 OpenHDR-DirectML is a hardware-accelerated video enhancement pipeline designed to convert standard 8-bit SDR (Rec.709) video streams into high-dynamic-range 10-bit HDR10 (BT.2020 / SMPTE ST 2084 PQ) in real time on AMD Radeon GPUs using **Microsoft DirectML (DirectX 12)** and **VapourSynth**.
 
-It seamlessly integrates into modern media player stacks (**MPC-BE**, **AviSynth Filter / AVSF**, **MPC Video Renderer**) and coexists perfectly with **SVP 4 (SmoothVideo Project)** 120 / 144 FPS motion interpolation.
+Supports two flexible deployment options:
+- **Standalone Mode (No SVP Required)**: Real-time AI HDR upconversion at native video framerate (24 / 30 / 60 FPS) directly inside MPC-BE.
+- **SVP 4 Integration Mode**: Real-time AI HDR upconversion combined with 120 / 144 FPS high-refresh motion interpolation.
 
 ---
 
@@ -36,14 +38,14 @@ It seamlessly integrates into modern media player stacks (**MPC-BE**, **AviSynth
   │  5. Dynamic Specular Highlight Expansion (Pop)     │
   │  6. Floyd-Steinberg Error-Diffusion Dithering      │
   └─────────────────────┬──────────────────────────────┘
-                        │ (Processed HDR stream @ 24fps)
-                        ▼
-  ┌────────────────────────────────────────────────────┐
-  │  STAGE 2: SVP 4 Motion Interpolation               │
-  │  - Ingests the 24fps enhanced stream               │
-  │  - Calculates motion vectors (core.svp2.SmoothFps) │
-  │  - Outputs silky smooth 120 / 144 fps              │
-  └─────────────────────┬──────────────────────────────┘
+                        │
+         ┌──────────────┴──────────────┐
+         │ (Standalone Mode)           │ (SVP 4 Coexistence)
+         │ Outputs 24fps HDR           │ Interpolates to 120/144fps
+         ▼                             ▼
+  [Direct Delivery]             [SVP 4 SmoothFps Engine]
+         │                             │
+         └──────────────┬──────────────┘
                         │
                         ▼
              MPC Video Renderer (MPCVR)
@@ -92,10 +94,19 @@ Benchmarked on **AMD Radeon RX 7900 XTX** (Navi 31, RDNA 3 AI Matrix Accelerator
 
 ## 4. Quickstart Guide
 
-### Option A: Plug & Play Bundle (Recommended)
-1. Download the pre-built `OpenHDR-for-MPCBE.zip` from the [Releases](https://github.com/scorpion421/OpenHDR-DirectML/releases) tab.
-2. Extract the archive into your MPC-BE folder (where `mpc-be64.exe` is located).
-3. If using **SVP 4**, open `%APPDATA%\SVP4\override.js` and add:
+### Option 1: Standalone MPC-BE (No SVP Required)
+1. Download `OpenHDR-for-MPCBE.zip` from the [Releases](https://github.com/scorpion421/OpenHDR-DirectML/releases) tab.
+2. Extract all files into your MPC-BE directory (where `mpc-be64.exe` is located):
+   - `OpenHDR\` (folder)
+   - `vapoursynth_filter_64.ax`
+   - `vapoursynth_filter.ini`
+3. In MPC-BE, go to **View** -> **Options** -> **External Filters** -> **Add Filter...** -> Select `vapoursynth_filter_64.ax` -> set to **Prefer**.
+4. In **Video**, ensure **MPC Video Renderer (MPCVR)** is selected.
+5. Start playback.
+
+### Option 2: SVP 4 Coexistence Mode (AI HDR + 120/144 FPS)
+1. Copy only the `OpenHDR\` folder from `OpenHDR-for-MPCBE.zip` into your MPC-BE folder.
+2. Open `%APPDATA%\SVP4\override.js` and insert inside `override = function()`:
    ```javascript
    global.baseScript = global.baseScript.replace(
        "def interpolate(clip):",
@@ -105,27 +116,8 @@ Benchmarked on **AMD Radeon RX 7900 XTX** (Navi 31, RDNA 3 AI Matrix Accelerator
        "    clip = vs_directml_hdr.Convert(clip, model_path='D:/Apps/MPCBE/OpenHDR/hdrtvnet_1080p_fp16.onnx')\n"
    );
    ```
-   *(Update `D:/Apps/MPCBE/OpenHDR` to your path).*
-4. Start playback in MPC-BE.
-
-### Option B: Build & Export from Source
-1. Clone this repository:
-   ```powershell
-   git clone https://github.com/scorpion421/OpenHDR-DirectML.git
-   cd OpenHDR-DirectML
-   ```
-2. Set up virtual environment and install requirements:
-   ```powershell
-   .\setup_env.ps1
-   ```
-3. Export and compile the DirectML ONNX model:
-   ```powershell
-   python build_cinematic_hdr.py
-   ```
-4. Run the automated pipeline benchmark:
-   ```powershell
-   python benchmark_dml.py
-   ```
+   *(Update `D:/Apps/MPCBE/OpenHDR` to your actual path).*
+3. Play video. SVP 4 executes AI conversion at 24 FPS and interpolates smoothly to 120/144 FPS in 10-bit HDR10.
 
 ---
 
@@ -150,6 +142,7 @@ OpenHDR-DirectML/
 ├── build_cinematic_hdr.py     # Calibrated S-curve ONNX export tool
 ├── hdrtvnet_1080p_fp16.onnx   # Production DirectML FP16 model
 ├── vs_directml_hdr.py         # Core VapourSynth filter node implementation
+├── openhdr.vpy                # Standalone script for non-SVP MPC-BE users
 ├── benchmark_dml.py           # Hardware latency benchmark tool
 ├── test_pipeline.py           # Verification and pattern generator suite
 ├── requirements.txt           # Python package dependencies
