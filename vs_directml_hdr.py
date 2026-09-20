@@ -108,13 +108,23 @@ def Convert(
     if not HAS_VAPOURSYNTH:
         raise RuntimeError("VapourSynth is not installed or available in this Python environment.")
 
+    # Check if stream is already HDR10 (SMPTE ST 2084 / PQ), if so bypass
+    try:
+        sample_frame = clip.get_frame(0)
+        if sample_frame.props.get("_Transfer") == 16:
+            return clip
+    except Exception:
+        pass
+
     core = vs.core
     engine = DirectML_HDR_Engine(model_path=model_path, device_id=device_id)
 
+    orig_w = clip.width
+    orig_h = clip.height
+    needs_scale = (orig_w, orig_h) != (engine.expected_w, engine.expected_h)
+
     # 1. Standardize input clip resolution to match model tensor shape
-    in_w = clip.width
-    in_h = clip.height
-    if (in_w, in_h) != (engine.expected_w, engine.expected_h):
+    if needs_scale:
         clip = core.resize.Bicubic(clip, width=engine.expected_w, height=engine.expected_h)
 
     # 2. Convert to planar 32-bit float RGB (Rec.709) for model input
@@ -165,6 +175,10 @@ def Convert(
             matrix_s="2020ncl",
             range_s="limited",
         )
+
+    # If source had a different resolution, scale back to original resolution
+    if needs_scale:
+        hdr_output_clip = core.resize.Bicubic(hdr_output_clip, width=orig_w, height=orig_h)
 
     # 4. Inject HDR10 frame properties conforming to SMPTE ST 2084 / BT.2020 standards
     hdr10_clip = core.std.SetFrameProps(
