@@ -121,7 +121,37 @@ Benchmarked on **AMD Radeon RX 7900 XTX** (Navi 31, RDNA 3 AI Matrix Accelerator
 
 ---
 
-## 5. Verification & Telemetry
+## 5. Configuration (`openhdr.ini`)
+
+OpenHDR supports hot-reload configuration via `openhdr.ini` placed in the player directory (e.g. next to `mpc-be64.exe`) or in `OpenHDR/openhdr.ini`:
+
+```ini
+[General]
+enabled = true              ; Master toggle for OpenHDR DirectML conversion
+sdr_only = true             ; Only process SDR video (bypasses native HDR10/HLG)
+max_width = 1920            ; Resolution gate limit
+max_height = 1088
+
+[HDR_Engine]
+display_peak_nits = 400     ; Peak mastering display luminance in nits
+black_level_nits = 0.005    ; Target display black level
+max_cll = 400               ; Content light level metadata
+max_fall = 200
+contrast_curve = 1.06       ; Rich inky blacks (1.00 = standard linear)
+vibrance_boost = 0.35       ; Midtone color vibrance boost (shadow-protected)
+specular_boost = 0.20       ; Highlight pop intensity
+
+[Performance]
+device_id = 0               ; GPU adapter (0 = discrete GPU, e.g. RX 7900 XTX)
+use_fp16 = true             ; FP16 tensor acceleration
+```
+
+### Hardware Upscaling Notice:
+Resolution upscaling to fullscreen display resolutions (1440p, 4K UHD, Ultrawide) is handled natively by AMD Radeon Hardware / Direct3D 11 Video Processor (D3D11 VP) in MPC Video Renderer. This eliminates DirectShow memory copy latency and delivers rock-solid 144+ FPS presentation without skipped frames.
+
+---
+
+## 6. Verification & Telemetry
 
 1. **OSD Telemetry**: During playback in MPC-BE, press `Ctrl + J` to inspect the MPC Video Renderer OSD:
    - `Color: RGB 10-bit HDR10: On`
@@ -134,7 +164,7 @@ Benchmarked on **AMD Radeon RX 7900 XTX** (Navi 31, RDNA 3 AI Matrix Accelerator
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 ```text
 OpenHDR-DirectML/
@@ -142,6 +172,7 @@ OpenHDR-DirectML/
 ├── build_cinematic_hdr.py     # Calibrated S-curve ONNX export tool
 ├── hdrtvnet_1080p_fp16.onnx   # Production DirectML FP16 model
 ├── vs_directml_hdr.py         # Core VapourSynth filter node implementation
+├── openhdr.ini                # Central player configuration file
 ├── openhdr.vpy                # Standalone script for non-SVP MPC-BE users
 ├── benchmark_dml.py           # Hardware latency benchmark tool
 ├── test_pipeline.py           # Verification and pattern generator suite
@@ -153,6 +184,6 @@ OpenHDR-DirectML/
 
 ---
 
-## 7. License
+## 8. License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

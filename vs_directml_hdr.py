@@ -5,14 +5,15 @@ Performs real-time AI-powered SDR-to-HDR10 conversion on AMD Radeon GPUs
 
 Signal & Metadata Flow:
   Input:  8-bit SDR Rec.709 (YUV420P8 or RGB24)
-  Stage:  DirectML FP16 Tensor Inference (NCHW)
+  Stage:  DirectML Tensor Inference (NCHW)
   Output: 10-bit HDR10 (YUV420P10 or RGB48)
-  Flags:  _Matrix=9 (BT.2020), _Primaries=9 (BT.2020), _Transfer=16 (PQ)
+  Flags:  _Matrix=1 (BT.709), _Primaries=1 (BT.709), _Transfer=1 (BT.709)
 """
 
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,7 @@ class DirectML_HDR_Engine:
         Args:
             nchw_rgb: NumPy array with shape (1, 3, H, W).
         Returns:
-            NumPy array with shape (1, 3, H, W) containing BT.2020 PQ values [0.0, 1.0].
+            NumPy array with shape (1, 3, H, W) containing HDR values [0.0, 1.0].
         """
         in_dtype = np.float16 if self.is_fp16 else np.float32
         tensor = nchw_rgb.astype(in_dtype, copy=False)
@@ -100,10 +101,6 @@ def load_config() -> dict[str, Any]:
         "contrast_curve": 1.06,
         "vibrance_boost": 0.35,
         "specular_boost": 0.20,
-        "sr_enabled": False,
-        "sr_target_height": 1440,
-        "sr_sharpness": 0.50,
-        "sr_mode": "internal",
         "device_id": 0,
         "use_fp16": True,
     }
@@ -143,12 +140,6 @@ def load_config() -> dict[str, Any]:
             defaults["contrast_curve"] = parser.getfloat("HDR_Engine", "contrast_curve", fallback=defaults["contrast_curve"])
             defaults["vibrance_boost"] = parser.getfloat("HDR_Engine", "vibrance_boost", fallback=defaults["vibrance_boost"])
             defaults["specular_boost"] = parser.getfloat("HDR_Engine", "specular_boost", fallback=defaults["specular_boost"])
-
-        if parser.has_section("SuperResolution"):
-            defaults["sr_enabled"] = parser.getboolean("SuperResolution", "enabled", fallback=defaults["sr_enabled"])
-            defaults["sr_target_height"] = parser.getint("SuperResolution", "target_height", fallback=defaults["sr_target_height"])
-            defaults["sr_sharpness"] = parser.getfloat("SuperResolution", "sharpness", fallback=defaults["sr_sharpness"])
-            defaults["sr_mode"] = parser.get("SuperResolution", "mode", fallback=defaults["sr_mode"]).strip().lower()
 
         if parser.has_section("Performance"):
             defaults["device_id"] = parser.getint("Performance", "device_id", fallback=defaults["device_id"])
@@ -203,14 +194,6 @@ def Convert(
             pass
 
     core = vs.core
-
-    # 4. Optional Super Resolution upscaling
-    if cfg["sr_enabled"] and cfg["sr_mode"] == "internal" and clip.height < cfg["sr_target_height"]:
-        scale = cfg["sr_target_height"] / clip.height
-        target_w = int(round(clip.width * scale / 2) * 2)
-        target_h = cfg["sr_target_height"]
-        clip = core.resize.Spline36(clip, width=target_w, height=target_h)
-
     gpu_id = device_id if device_id is not None else cfg["device_id"]
     engine = DirectML_HDR_Engine(model_path=model_path, device_id=gpu_id)
 
@@ -225,31 +208,38 @@ def Convert(
     # 2. Convert to planar 32-bit float RGB (Rec.709) for model input
     rgb_sdr_clip = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s="709")
 
+    # Thread-local static tensor allocation to eliminate heap churn and ensure 100% thread safety
+    import gc
+    gc.set_threshold(100000, 50, 50)
+    in_dtype = np.float16 if engine.is_fp16 else np.float32
+    tls = threading.local()
+
+    def get_thread_tensor(h: int, w: int) -> np.ndarray:
+        tensor = getattr(tls, "tensor", None)
+        if tensor is None or tensor.shape != (1, 3, h, w) or tensor.dtype != in_dtype:
+            tensor = np.empty((1, 3, h, w), dtype=in_dtype)
+            tls.tensor = tensor
+        return tensor
+
     def process_frame(n: int, f: Any) -> vs.VideoFrame:
         in_frame = f if isinstance(f, vs.VideoFrame) else f[0]
         h = in_frame.height
         w = in_frame.width
 
-        # Read R, G, B planes via memoryview with zero-copy
-        r_plane = np.frombuffer(in_frame[0], dtype=np.float32).reshape((h, w))
-        g_plane = np.frombuffer(in_frame[1], dtype=np.float32).reshape((h, w))
-        b_plane = np.frombuffer(in_frame[2], dtype=np.float32).reshape((h, w))
-
-        # Stack into [1, 3, H, W] tensor
-        rgb_tensor = np.stack([r_plane, g_plane, b_plane], axis=0)[np.newaxis, ...]
+        # Thread-safe zero-allocation fill directly from plane memory
+        thread_tensor = get_thread_tensor(h, w)
+        thread_tensor[0, 0] = np.frombuffer(in_frame[0], dtype=np.float32).reshape((h, w))
+        thread_tensor[0, 1] = np.frombuffer(in_frame[1], dtype=np.float32).reshape((h, w))
+        thread_tensor[0, 2] = np.frombuffer(in_frame[2], dtype=np.float32).reshape((h, w))
 
         # DirectML GPU inference
-        out_tensor = engine.infer_tensor(rgb_tensor)
+        out_tensor = engine.infer_tensor(thread_tensor)
 
-        # Write planes into copy of frame
+        # Write planes into frame
         out_frame = in_frame.copy()
-        out_r = out_tensor[0, 0].astype(np.float32, copy=False)
-        out_g = out_tensor[0, 1].astype(np.float32, copy=False)
-        out_b = out_tensor[0, 2].astype(np.float32, copy=False)
-
-        np.frombuffer(out_frame[0], dtype=np.float32).reshape((h, w))[:] = out_r
-        np.frombuffer(out_frame[1], dtype=np.float32).reshape((h, w))[:] = out_g
-        np.frombuffer(out_frame[2], dtype=np.float32).reshape((h, w))[:] = out_b
+        np.frombuffer(out_frame[0], dtype=np.float32).reshape((h, w))[:] = out_tensor[0, 0]
+        np.frombuffer(out_frame[1], dtype=np.float32).reshape((h, w))[:] = out_tensor[0, 1]
+        np.frombuffer(out_frame[2], dtype=np.float32).reshape((h, w))[:] = out_tensor[0, 2]
         return out_frame
 
     # Evaluate per frame
