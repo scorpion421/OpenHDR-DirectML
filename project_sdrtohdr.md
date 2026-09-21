@@ -65,8 +65,8 @@ Establish an open-source, hardware-agnostic AI video pipeline that performs real
 * **Reference:** CVPR / Shanghai Jiao Tong University research for television broadcast SDR-to-HDR conversion.
 * **Multi-Branch Architecture:**
   1. **Global Color Mapping (GCM):** Expands the color gamut from Rec.709 to DCI-P3 / BT.2020 without hue drift.
-  2. **Local Tone Mapping (LTM):** Dynamically adjusts scene midtones while preserving natural human skin tones (100–140 Nits).
-  3. **Highlight Enhancement (HE):** Selectively reconstructs overexposed/specular areas (lamps, headlights, sun reflections) and boosts them to 400–1000 Nits.
+  2. **Local Tone Mapping (LTM):** Dynamically adjusts scene midtones while preserving natural human skin tones (100 - 140 Nits).
+  3. **Highlight Enhancement (HE):** Selectively reconstructs overexposed/specular areas (lamps, headlights, sun reflections) and boosts them to 400 - 1000 Nits.
 
 ### Alternative (Ultra-Low Latency): AdaInt (Adaptive 3D-LUT)
 * A lightweight convolutional network predicts coefficients for a dynamic 33x33x33 3D-LUT per frame.
@@ -155,7 +155,7 @@ smooth = core.svp2.SmoothFps(clip, ...)
 smooth.set_output()
 ```
 
-* **Efficiency Advantage:** The AI only computes **24 frames per second** (utilizing ~10–15% of the RX 7900 XTX), completely avoiding the massive computational overhead of inferencing at 120 fps.
+* **Efficiency Advantage:** The AI only computes **24 frames per second** (utilizing ~10 - 15% of the RX 7900 XTX), completely avoiding the massive computational overhead of inferencing at 120 fps.
 
 ---
 
@@ -163,7 +163,7 @@ smooth.set_output()
 
 ### Phase 1: DirectML Hardware Spike & Benchmarking
 * Set up a standalone Python environment with `onnxruntime-directml`.
-* Run test tensors `(1, 3, 1080, 1920)` through DirectML on the RX 7900 XTX to confirm the 4–6 ms latency target.
+* Run test tensors `(1, 3, 1080, 1920)` through DirectML on the RX 7900 XTX to confirm the 4 - 6 ms latency target.
 
 ### Phase 2: Model Sourcing & FP16 ONNX Export
 * Download pretrained open-source checkpoints (HDRTVNet / AdaInt).

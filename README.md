@@ -150,8 +150,8 @@ use_fp16 = true             ; FP16 tensor acceleration
 Resolution upscaling to fullscreen display resolutions (1440p, 4K UHD, Ultrawide) is handled natively in hardware by the AMD Radeon GPU and Direct3D 11 Video Processor (D3D11 VP) in MPC Video Renderer. This eliminates DirectShow memory copy latency and delivers rock-solid 144+ FPS presentation without skipped frames.
 
 #### How to Enable / Disable MPC-VR Hardware Super Resolution:
-* **Option A — MPC-BE GUI**: During video playback, right-click video &rarr; **Filters** &rarr; **MPC Video Renderer** &rarr; Check or uncheck **Super Resolution**.
-* **Option B — Windows Registry (PowerShell)**:
+* **Option A  -  MPC-BE GUI**: During video playback, right-click video &rarr; **Filters** &rarr; **MPC Video Renderer** &rarr; Check or uncheck **Super Resolution**.
+* **Option B  -  Windows Registry (PowerShell)**:
   * Enable (Value `1`):
     ```powershell
     Set-ItemProperty -Path "HKCU:\Software\MPC-BE Filters\MPC Video Renderer" -Name "VPSuperResolution" -Value 1
@@ -160,7 +160,7 @@ Resolution upscaling to fullscreen display resolutions (1440p, 4K UHD, Ultrawide
     ```powershell
     Set-ItemProperty -Path "HKCU:\Software\MPC-BE Filters\MPC Video Renderer" -Name "VPSuperResolution" -Value 0
     ```
-* **Option C — AMD Driver Setting**: Open **AMD Software: Adrenalin Edition** &rarr; **Gaming** &rarr; **Graphics** &rarr; Enable **Video Super Resolution (VSR)**.
+* **Option C  -  AMD Driver Setting**: Open **AMD Software: Adrenalin Edition** &rarr; **Gaming** &rarr; **Graphics** &rarr; Enable **Video Super Resolution (VSR)**.
 
 ---
 
