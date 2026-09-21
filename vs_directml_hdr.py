@@ -113,10 +113,13 @@ def Convert(
     if not HAS_VAPOURSYNTH:
         raise RuntimeError("VapourSynth is not installed or available in this Python environment.")
 
-    # Check if stream is already HDR10 (SMPTE ST 2084 / PQ), if so bypass
+    # Check if stream is already HDR (SMPTE ST 2084 / PQ, HLG, BT.2020), if so bypass completely
     try:
         sample_frame = clip.get_frame(0)
-        if sample_frame.props.get("_Transfer") == 16:
+        transfer = sample_frame.props.get("_Transfer", 0)
+        primaries = sample_frame.props.get("_Primaries", 0)
+        matrix = sample_frame.props.get("_Matrix", 0)
+        if transfer in (14, 16, 18) or primaries == 9 or matrix == 9:
             return clip
     except Exception:
         pass
