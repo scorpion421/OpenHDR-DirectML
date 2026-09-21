@@ -86,54 +86,131 @@ class DirectML_HDR_Engine:
         return outputs[0]
 
 
+def load_config() -> dict[str, Any]:
+    """Loads configuration from openhdr.ini in player root or OpenHDR directory."""
+    defaults: dict[str, Any] = {
+        "enabled": True,
+        "sdr_only": True,
+        "max_width": 1920,
+        "max_height": 1088,
+        "display_peak_nits": 400,
+        "black_level_nits": 0.005,
+        "max_cll": 400,
+        "max_fall": 200,
+        "contrast_curve": 1.06,
+        "vibrance_boost": 0.35,
+        "specular_boost": 0.20,
+        "sr_enabled": False,
+        "sr_target_height": 1440,
+        "sr_sharpness": 0.50,
+        "sr_mode": "internal",
+        "device_id": 0,
+        "use_fp16": True,
+    }
+
+    search_paths = [
+        Path(r"D:\Apps\MPCBE\openhdr.ini"),
+        Path(__file__).parent / "openhdr.ini",
+        Path(__file__).parent.parent / "openhdr.ini",
+    ]
+
+    config_path = None
+    for p in search_paths:
+        if p.exists():
+            config_path = p
+            break
+
+    if config_path is None:
+        return defaults
+
+    import configparser
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(str(config_path), encoding="utf-8")
+        if parser.has_section("General"):
+            defaults["enabled"] = parser.getboolean("General", "enabled", fallback=defaults["enabled"])
+            defaults["sdr_only"] = parser.getboolean("General", "sdr_only", fallback=defaults["sdr_only"])
+            defaults["max_width"] = parser.getint("General", "max_width", fallback=defaults["max_width"])
+            defaults["max_height"] = parser.getint("General", "max_height", fallback=defaults["max_height"])
+
+        if parser.has_section("HDR_Engine"):
+            defaults["display_peak_nits"] = parser.getint("HDR_Engine", "display_peak_nits", fallback=defaults["display_peak_nits"])
+            defaults["black_level_nits"] = parser.getfloat("HDR_Engine", "black_level_nits", fallback=defaults["black_level_nits"])
+            defaults["max_cll"] = parser.getint("HDR_Engine", "max_cll", fallback=defaults["max_cll"])
+            defaults["max_fall"] = parser.getint("HDR_Engine", "max_fall", fallback=defaults["max_fall"])
+            defaults["contrast_curve"] = parser.getfloat("HDR_Engine", "contrast_curve", fallback=defaults["contrast_curve"])
+            defaults["vibrance_boost"] = parser.getfloat("HDR_Engine", "vibrance_boost", fallback=defaults["vibrance_boost"])
+            defaults["specular_boost"] = parser.getfloat("HDR_Engine", "specular_boost", fallback=defaults["specular_boost"])
+
+        if parser.has_section("SuperResolution"):
+            defaults["sr_enabled"] = parser.getboolean("SuperResolution", "enabled", fallback=defaults["sr_enabled"])
+            defaults["sr_target_height"] = parser.getint("SuperResolution", "target_height", fallback=defaults["sr_target_height"])
+            defaults["sr_sharpness"] = parser.getfloat("SuperResolution", "sharpness", fallback=defaults["sr_sharpness"])
+            defaults["sr_mode"] = parser.get("SuperResolution", "mode", fallback=defaults["sr_mode"]).strip().lower()
+
+        if parser.has_section("Performance"):
+            defaults["device_id"] = parser.getint("Performance", "device_id", fallback=defaults["device_id"])
+            defaults["use_fp16"] = parser.getboolean("Performance", "use_fp16", fallback=defaults["use_fp16"])
+    except Exception as err:
+        print(f"[OpenHDR] Warning: Failed to parse {config_path}: {err}. Using defaults.")
+
+    return defaults
+
+
 def Convert(
     clip: Any,
     model_path: str | Path = "hdrtvnet_1080p_fp16.onnx",
-    device_id: int = 0,
+    device_id: int | None = None,
     output_format: str | None = None,
-    max_luminance: int = 400,
-    min_luminance: float = 0.005,
-    max_cll: int = 400,
-    max_fall: int = 200,
-    max_width: int = 1920,
-    max_height: int = 1088,
+    max_luminance: int | None = None,
+    min_luminance: float | None = None,
+    max_cll: int | None = None,
+    max_fall: int | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
 ) -> Any:
     """VapourSynth filter entrypoint for DirectML HDR conversion.
     
-    Args:
-        clip: Input VapourSynth VideoNode (8-bit SDR Rec.709).
-        model_path: Path to optimized FP16 ONNX model.
-        device_id: DirectML GPU device ID (0 = discrete GPU).
-        output_format: Output pixel format ('YUV420P10' or 'RGB48').
-        max_luminance: Mastering display peak luminance in nits.
-        min_luminance: Mastering display black level in nits.
-        max_cll: Maximum Content Light Level in nits.
-        max_fall: Maximum Frame-Average Light Level in nits.
-        max_width: Maximum allowed width (default 1920, content > 1080p is bypassed).
-        max_height: Maximum allowed height (default 1088, content > 1080p is bypassed).
-    Returns:
-        Converted 10-bit HDR10 VideoNode with full HDR10 frame properties.
+    Reads configuration from openhdr.ini with fallback to keyword arguments.
     """
     if not HAS_VAPOURSYNTH:
         raise RuntimeError("VapourSynth is not installed or available in this Python environment.")
 
-    # 1. Resolution gate: Only engage for up to 1080p (bypass 1440p, 4K UHD, etc.)
-    if clip.width > max_width or clip.height > max_height:
+    cfg = load_config()
+
+    # 1. Master toggle from openhdr.ini
+    if not cfg["enabled"]:
         return clip
 
-    # 2. SDR gate: Only engage for SDR streams (bypass native HDR10 / PQ, HLG, BT.2020)
-    try:
-        sample_frame = clip.get_frame(0)
-        transfer = sample_frame.props.get("_Transfer", 0)
-        primaries = sample_frame.props.get("_Primaries", 0)
-        matrix = sample_frame.props.get("_Matrix", 0)
-        if transfer in (14, 16, 18) or primaries == 9 or matrix == 9:
-            return clip
-    except Exception:
-        pass
+    # 2. Resolution gate: Only engage for content up to max_width x max_height (default 1080p)
+    limit_w = max_width if max_width is not None else cfg["max_width"]
+    limit_h = max_height if max_height is not None else cfg["max_height"]
+    if clip.width > limit_w or clip.height > limit_h:
+        return clip
+
+    # 3. SDR gate: Only engage for SDR streams (bypass native HDR10 / PQ, HLG, BT.2020)
+    if cfg["sdr_only"]:
+        try:
+            sample_frame = clip.get_frame(0)
+            transfer = sample_frame.props.get("_Transfer", 0)
+            primaries = sample_frame.props.get("_Primaries", 0)
+            matrix = sample_frame.props.get("_Matrix", 0)
+            if transfer in (14, 16, 18) or primaries == 9 or matrix == 9:
+                return clip
+        except Exception:
+            pass
 
     core = vs.core
-    engine = DirectML_HDR_Engine(model_path=model_path, device_id=device_id)
+
+    # 4. Optional Super Resolution upscaling
+    if cfg["sr_enabled"] and cfg["sr_mode"] == "internal" and clip.height < cfg["sr_target_height"]:
+        scale = cfg["sr_target_height"] / clip.height
+        target_w = int(round(clip.width * scale / 2) * 2)
+        target_h = cfg["sr_target_height"]
+        clip = core.resize.Spline36(clip, width=target_w, height=target_h)
+
+    gpu_id = device_id if device_id is not None else cfg["device_id"]
+    engine = DirectML_HDR_Engine(model_path=model_path, device_id=gpu_id)
 
     orig_w = clip.width
     orig_h = clip.height
