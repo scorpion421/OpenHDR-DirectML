@@ -108,15 +108,17 @@ def load_config() -> dict[str, Any]:
         "use_fp16": True,
     }
 
+    # Dynamic search paths (searches player root and OpenHDR directories portably)
     search_paths = [
-        Path(r"D:\Apps\MPCBE\openhdr.ini"),
-        Path(__file__).parent / "openhdr.ini",
-        Path(__file__).parent.parent / "openhdr.ini",
+        Path(os.environ["OPENHDR_INI"]) if "OPENHDR_INI" in os.environ else None,
+        Path(__file__).resolve().parent.parent / "openhdr.ini",
+        Path(__file__).resolve().parent / "openhdr.ini",
+        Path.cwd() / "openhdr.ini",
     ]
 
     config_path = None
     for p in search_paths:
-        if p.exists():
+        if p is not None and p.exists():
             config_path = p
             break
 
