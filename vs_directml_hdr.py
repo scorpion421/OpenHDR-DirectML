@@ -95,6 +95,8 @@ def Convert(
     min_luminance: float = 0.005,
     max_cll: int = 400,
     max_fall: int = 200,
+    max_width: int = 1920,
+    max_height: int = 1088,
 ) -> Any:
     """VapourSynth filter entrypoint for DirectML HDR conversion.
     
@@ -107,13 +109,19 @@ def Convert(
         min_luminance: Mastering display black level in nits.
         max_cll: Maximum Content Light Level in nits.
         max_fall: Maximum Frame-Average Light Level in nits.
+        max_width: Maximum allowed width (default 1920, content > 1080p is bypassed).
+        max_height: Maximum allowed height (default 1088, content > 1080p is bypassed).
     Returns:
         Converted 10-bit HDR10 VideoNode with full HDR10 frame properties.
     """
     if not HAS_VAPOURSYNTH:
         raise RuntimeError("VapourSynth is not installed or available in this Python environment.")
 
-    # Check if stream is already HDR (SMPTE ST 2084 / PQ, HLG, BT.2020), if so bypass completely
+    # 1. Resolution gate: Only engage for up to 1080p (bypass 1440p, 4K UHD, etc.)
+    if clip.width > max_width or clip.height > max_height:
+        return clip
+
+    # 2. SDR gate: Only engage for SDR streams (bypass native HDR10 / PQ, HLG, BT.2020)
     try:
         sample_frame = clip.get_frame(0)
         transfer = sample_frame.props.get("_Transfer", 0)
